@@ -63,6 +63,7 @@ async def main():
 
         term, leader = LEADERS.popitem()
         print(f"# Successfully elected {leader} for term {term}")
+        print(f"### Simple Election Test Passed!")
         NORMAL_OP_TERM = term 
         NORMAL_OP_THRESHOLD = n-1
         NORMAL_OP_EVENT = asyncio.Event()
@@ -82,7 +83,7 @@ async def main():
 
         print(f"# Successfully elected {leader2} for term {term2}")
  #       print(f"Leaders are: {LEADERS}, nodes in normal operational mode: {NORMAL_OP}")
-        print("### Test passed!")
+        print("### Election after failure test passed!")
 
         for p in processes:
             if p.pid != leader:

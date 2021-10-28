@@ -94,7 +94,7 @@ async def main():
             print("### Error! Repairing partition should not result in a new term")
             return 
 
-        print("### Test passed!")
+        print("### Partition test passed!")
 
         for p in processes:
             if p.pid != leader:
