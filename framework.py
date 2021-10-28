@@ -86,6 +86,7 @@ class Network:
         self.processes = {}
         self.message_count = 0
         self.byte_count = 0
+        self.partition = None
 
     def register(self, process, pid):
         pid = str(pid)
@@ -105,8 +106,28 @@ class Network:
             alog(f"sending a message from {src} to {dst} but {dst} is not registered")
             return
 
+        if self.partition and self.partition[src] != self.partition[dst]:
+            alog("dropping message from {src} to {dst} due to partition")
+            return
+            
         self.processes[dst].send_message(src, msg)
 
+    def set_partition(self, *partitions):
+        """
+        Arguments are a list of processes in each partition. E.g.: `set_partition([0,1],[2,3,4])`
+        creates 2 partitions with 0 & 1 in the first and 2,3,4 in the second. Messages between
+        servers in different partitions will be dropped.
+        """
+        self.partition = {}
+        # partition maps from server to partition number
+        for i,part in enumerate(partitions):
+            for server in part: 
+                self.partition[server] = i
+        # yeah this could've been a comprehension
+
+    def repair_partition(self):
+        """ resets to no partition """
+        self.partition = None
 
 async def main():
     import sys
