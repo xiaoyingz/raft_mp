@@ -45,7 +45,7 @@ async def main():
     NORMAL_OP_TERM = 0
 
     print("# Starting processes, waiting for election")
-    processes = await asyncio.gather(*[RaftProcess.create(str(pid), network, "python3", "raft.py", 
+    processes = await asyncio.gather(*[RaftProcess.create(str(pid), network, "./raft",
         str(pid), str(n)) for pid in range(n)])
     process_dict = { p.pid : p  for p in processes }
 
