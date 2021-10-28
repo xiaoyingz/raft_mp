@@ -28,7 +28,7 @@ class Process:
 
     @classmethod
     async def create(cls, pid, network, command, *args):
-        subproc = await asyncio.create_subprocess_exec(command, *args, str(pid),stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE)
+        subproc = await asyncio.create_subprocess_exec(command, *args, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE)
 
         self = cls(pid, network, subproc)
         return self
@@ -134,7 +134,7 @@ async def main():
 
     network = Network()
     for pid in range(int(sys.argv[1])):
-        await Process.create(str(pid), network, *sys.argv[2:])
+        await Process.create(str(pid), network, *sys.argv[2:], str(pid), sys.argv[1])
 
 if __name__ == "__main__":
     loop = asyncio.get_event_loop()
