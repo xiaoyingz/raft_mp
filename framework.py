@@ -2,9 +2,11 @@ import asyncio
 import re
 from collections import defaultdict
 import json
-import aioconsole
-
-DEBUG = False
+DEBUG = True
+try:
+    import aioconsole
+except ImportError:
+    DEBUG = False
 
 async def log(message):
     if DEBUG:
