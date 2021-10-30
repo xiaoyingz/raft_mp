@@ -2,6 +2,7 @@ import asyncio
 import re
 from collections import defaultdict
 import json
+import sys
 DEBUG = True
 try:
     import aioconsole
@@ -39,27 +40,31 @@ class Process:
         """
         read messages, process them, and send them to the network
         """
-        await log(f"Starting reader {self.pid}")
-        while True:
-            line = await self.subproc.stdout.readline()
-            await log(f"{self.pid}>{line.decode().strip()}")
-            if not line:
-                break
-            if line.startswith(b"SEND"):
-                _, dst, msg = line.strip().split(b' ', 2)
-                dst = dst.decode()
-                self.network.send(self.pid, dst, msg)
-            elif line.startswith(b"STATE"):
-                _, stateline = line.strip().split(b' ', 1)
-                var, value = stateline.split(b'=', 1)
-                decoded_value = json.loads(value)
-                if m := re.match(rb'(.*)\[(.*)\]', var):
-                    dict_name = m.group(1)
-                    index = m.group(2)
-                    self.state[dict_name.decode()][index.decode()] = decoded_value
-                else:
-                    self.state[var.decode()] = decoded_value
-                self.update_state()
+        try: 
+            await log(f"Starting reader {self.pid}")
+            while True:
+                line = await self.subproc.stdout.readline()
+                await log(f"{self.pid}>{line.decode().strip()}")
+                if not line:
+                    break
+                if line.startswith(b"SEND"):
+                    _, dst, msg = line.strip().split(b' ', 2)
+                    dst = dst.decode()
+                    self.network.send(self.pid, dst, msg)
+                elif line.startswith(b"STATE"):
+                    _, stateline = line.strip().split(b' ', 1)
+                    var, value = stateline.split(b'=', 1)
+                    decoded_value = json.loads(value)
+                    if m := re.match(rb'(.*)\[(.*)\]', var):
+                        dict_name = m.group(1)
+                        index = m.group(2)
+                        self.state[dict_name.decode()][index.decode()] = decoded_value
+                    else:
+                        self.state[var.decode()] = decoded_value
+                    self.update_state()
+        except Exception as e:
+            await log(f"Got exception {type(e)} {e} while processing line {line} on {self.pid}")
+            sys.exit(1)
 
     async def writer(self):
         while True:
@@ -135,10 +140,12 @@ async def main():
     import sys
 
     network = Network()
+    tasks = []
     for pid in range(int(sys.argv[1])):
-        await Process.create(str(pid), network, *sys.argv[2:], str(pid), sys.argv[1])
+        p = await Process.create(str(pid), network, *sys.argv[2:], str(pid), sys.argv[1])
+        tasks += [p.reader_task, p.writer_task]
+
+    await asyncio.gather(*tasks)
 
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-    loop.create_task(main())
-    loop.run_forever()
+    asyncio.get_event_loop().run_until_complete(main())
