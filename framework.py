@@ -4,14 +4,23 @@ from collections import defaultdict
 import json
 import sys
 DEBUG = True
-try:
-    import aioconsole
-except ImportError:
-    DEBUG = False
+STDOUT = None
+
+async def connect_stdin_stdout():
+    loop = asyncio.get_event_loop()
+    reader = asyncio.StreamReader()
+    protocol = asyncio.StreamReaderProtocol(reader)
+    await loop.connect_read_pipe(lambda: protocol, sys.stdin)
+    w_transport, w_protocol = await loop.connect_write_pipe(asyncio.streams.FlowControlMixin, sys.stdout)
+    writer = asyncio.StreamWriter(w_transport, w_protocol, reader, loop)
+    global STDOUT
+    STDOUT = writer
+    return reader, writer
 
 async def log(message):
     if DEBUG:
-        await aioconsole.aprint(asyncio.get_event_loop().time(), message)
+        STDOUT.write(f"{asyncio.get_event_loop().time()} {message}\n".encode())
+        await STDOUT.drain()
 
 def alog(message):
     if DEBUG:
@@ -64,6 +73,7 @@ class Process:
                     self.update_state()
         except Exception as e:
             await log(f"Got exception {type(e)} {e} while processing line {line} on {self.pid}")
+            await asyncio.sleep(10)
             sys.exit(1)
 
     async def writer(self):
@@ -137,8 +147,6 @@ class Network:
         self.partition = None
 
 async def main():
-    import sys
-
     network = Network()
     tasks = []
     for pid in range(int(sys.argv[1])):
