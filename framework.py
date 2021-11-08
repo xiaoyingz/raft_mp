@@ -3,28 +3,8 @@ import re
 from collections import defaultdict
 import json
 import sys
-DEBUG = True
-STDOUT = None
-
-async def connect_stdin_stdout():
-    loop = asyncio.get_event_loop()
-    reader = asyncio.StreamReader()
-    protocol = asyncio.StreamReaderProtocol(reader)
-    await loop.connect_read_pipe(lambda: protocol, sys.stdin)
-    w_transport, w_protocol = await loop.connect_write_pipe(asyncio.streams.FlowControlMixin, sys.stdout)
-    writer = asyncio.StreamWriter(w_transport, w_protocol, reader, loop)
-    global STDOUT
-    STDOUT = writer
-    return reader, writer
-
-async def log(message):
-    if DEBUG:
-        STDOUT.write(f"{asyncio.get_event_loop().time()} {message}\n".encode())
-        await STDOUT.drain()
-
-def alog(message):
-    if DEBUG:
-        asyncio.create_task(log(message))
+import alog
+from logging import INFO, ERROR, WARN
 
 class Process:
     def __init__(self, pid, network, subproc):
@@ -50,10 +30,9 @@ class Process:
         read messages, process them, and send them to the network
         """
         try: 
-            await log(f"Starting reader {self.pid}")
             while True:
                 line = await self.subproc.stdout.readline()
-                await log(f"{self.pid}>{line.decode().strip()}")
+                await alog.log(INFO, f"{self.pid}>{line.decode().strip()}")
                 if not line:
                     break
                 if line.startswith(b"SEND"):
@@ -67,12 +46,11 @@ class Process:
                     if m := re.match(rb'(.*)\[(.*)\]', var):
                         dict_name = m.group(1)
                         index = m.group(2)
-                        self.state[dict_name.decode()][index.decode()] = decoded_value
+                        self.update_state(dict_name.decode(), decoded_value, index.decode())
                     else:
-                        self.state[var.decode()] = decoded_value
-                    self.update_state()
+                        self.update_state(var.decode(), decoded_value)
         except Exception as e:
-            await log(f"Got exception {type(e)} {e} while processing line {line} on {self.pid}")
+            await alog.log(ERROR, f"Got exception {type(e)} {e} while processing line {line} on {self.pid}")
             await asyncio.sleep(10)
             sys.exit(1)
 
@@ -80,7 +58,7 @@ class Process:
         while True:
             (src, msg) = await self.message_queue.get()
             line = f"RECEIVE {src} ".encode() + msg + b"\n"
-            await log(f"{self.pid}<{line.decode().strip()}")
+            await alog.log(INFO, f"{self.pid}<{line.decode().strip()}")
             self.subproc.stdin.write(line)
             await self.subproc.stdin.drain()
 
@@ -95,7 +73,7 @@ class Process:
         self.subproc.terminate()
 
 
-    def update_state(self):
+    def update_state(self, var, value, index=None):
         pass # to be overridden in derived classes
 
 class Network:
@@ -120,11 +98,11 @@ class Network:
         self.message_count += 1
         self.byte_count += len(msg)
         if dst not in self.processes:
-            alog(f"sending a message from {src} to {dst} but {dst} is not registered")
+            alog.log_no_wait(WARN, f"sending a message from {src} to {dst} but {dst} is not registered")
             return
 
         if self.partition and self.partition[src] != self.partition[dst]:
-            alog("dropping message from {src} to {dst} due to partition")
+            alog.log_no_wait(INFO, f"dropping message from {src} to {dst} due to partition")
             return
             
         self.processes[dst].send_message(src, msg)
@@ -147,6 +125,7 @@ class Network:
         self.partition = None
 
 async def main():
+    await alog.init()
     network = Network()
     tasks = []
     for pid in range(int(sys.argv[1])):
