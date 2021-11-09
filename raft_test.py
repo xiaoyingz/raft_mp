@@ -55,6 +55,14 @@ class RaftGroup:
     def stop_all(self):
         for p in self.processes.values():
             p.stop()
+        self.processes = {}
+        self.tasks = []
+
+    def stop(self, pid):
+        p = self.processes.pop(pid)
+        self.tasks.remove(p.reader_task)
+        self.tasks.remove(p.writer_task)
+        p.stop()
     
 class RaftProcess(framework.Process):
     def __init__(self, *args, **kwargs):
