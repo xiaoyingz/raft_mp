@@ -42,6 +42,8 @@ class RaftGroup:
                 timeout = timeout, return_when=asyncio.FIRST_COMPLETED) 
             if error_task in done:
                 raise RuntimeError("Error occurred during test")
+            else: 
+                error_task.cancel()
 
             # propagate exceptions
             for t in done:
