@@ -20,7 +20,15 @@ async def main():
         await group.start(command)
 
         await alog.log(INFO, f"Waiting for a leader to be elected")
-        await group.wait_for_normal_op(n, 0)
+        def reached_normal_op(group):
+            if not group.normal_op: # no leaders yet
+                return False
+            _, nodes = max(group.normal_op.items())
+            if len(nodes) == n:
+                return True
+            else:
+                return False
+        await group.wait_predicate(reached_normal_op)
 
         if len(group.leaders) > 1:
             await alog.log(ERROR, "### Error!  more than 1 term with a leader despite no failures!")

@@ -19,7 +19,15 @@ async def main():
         await group.start(command)
 
         await alog.log(INFO, f"Waiting for a leader to be elected")
-        await group.wait_for_normal_op(n, 0)
+        def reached_normal_op(group):
+            if not group.normal_op: # no leaders yet
+                return False
+            _, nodes = max(group.normal_op.items())
+            if len(nodes) == n:
+                return True
+            else:
+                return False
+        await group.wait_predicate(reached_normal_op)
 
         if len(group.leaders) > 1:
             await alog.log(ERROR, "### Error!  more than 1 term with a leader despite no failures!")
@@ -32,7 +40,11 @@ async def main():
         await alog.log(INFO, f"# Partitioning off leader {leader}, waiting for next one to be elected")
         group.network.set_partition([leader], [str(p) for p in range(n) if str(p) != leader])
 
-        await group.wait_for_normal_op(n-1, term)
+        def next_term(group):
+            term2, nodes = max(group.normal_op.items())
+            return term2 > term and len(nodes) == n-1
+
+        await group.wait_predicate(next_term)
 
         if len(group.leaders) > 2:
             await alog.log(ERROR, "### Error!  more than 2 terms with a leader!")
@@ -49,12 +61,14 @@ async def main():
 
         group.network.repair_partition()
 
-        await group.wait_for_normal_op(n, term)
+        def full_group(group):
+            _, nodes = max(group.normal_op.items())
+            return len(nodes) == n
 
+        await group.wait_predicate(full_group)
 
         if len(group.leaders) > 2:
             await alog.log(ERROR, "### Error! Repairing partition should not result in a new term")
-            await asyncio.sleep(5)
             return 
 
         await alog.log(INFO, "### Partition test passed!")

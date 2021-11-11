@@ -15,6 +15,8 @@ class RaftGroup:
         self.normal_op_event = None
         self.normal_op_threshold = None
         self.normal_op_term = None
+        self.predicate = None
+        self.predicate_event = None
         self.n = n
         self.error = asyncio.Event()
         self.network = framework.Network()
@@ -29,16 +31,15 @@ class RaftGroup:
 
         self.tasks = [ p.reader_task for p in processes ] + [ p.writer_task for p in processes ]
     
-    async def wait_for_normal_op(self, threshold, term, timeout=30):
-        self.normal_op_threshold = threshold
-        self.normal_op_term = term
-        self.normal_op_event = asyncio.Event()
+    async def wait_predicate(self, predicate, timeout=30):
+        self.predicate = predicate
+        self.predicate_event = asyncio.Event()
 
         error_task = asyncio.create_task(self.error.wait())
-        normal_op_task = asyncio.create_task(self.normal_op_event.wait())
+        predicate_task = asyncio.create_task(self.predicate_event.wait())
 
         try: 
-            done, pending = await asyncio.wait(self.tasks + [ error_task, normal_op_task ],
+            done, _ = await asyncio.wait(self.tasks + [ error_task, predicate_task ],
                 timeout = timeout, return_when=asyncio.FIRST_COMPLETED) 
             if error_task in done:
                 raise RuntimeError("Error occurred during test")
@@ -47,12 +48,15 @@ class RaftGroup:
 
             # propagate exceptions
             for t in done:
-                if t != normal_op_task:
+                if t != predicate_task:
                     await t
 
         except asyncio.TimeoutError:
-            await alog.log(ERROR, "### Error! Normal operation not reached in {timeout} seconds")
+            await alog.log(ERROR, "### Error! Predicate not satisfied in {timeout} seconds")
             raise
+        finally:
+            self.predicate = None
+            self.predicate_event = None
 
     def stop_all(self):
         for p in self.processes.values():
@@ -65,6 +69,12 @@ class RaftGroup:
         self.tasks.remove(p.reader_task)
         self.tasks.remove(p.writer_task)
         p.stop()
+
+    def check_predicate(self):
+        if self.predicate is not None:
+            if self.predicate(self):
+                self.predicate_event.set()
+
     
 class RaftProcess(framework.Process):
     def __init__(self, *args, **kwargs):
@@ -75,7 +85,6 @@ class RaftProcess(framework.Process):
         alog.log_no_wait(DEBUG, f"update_state [{self.pid}@{self.term}]: {var}[{index}]={value}")
         if var == "term":
             self.term = int(value)
-            return
 
         if self.term is None:
             return
@@ -90,7 +99,6 @@ class RaftProcess(framework.Process):
                 self.group.leaders[self.term] = leader
             self.group.normal_op[self.term].add(self.pid)
             alog.log_no_wait(DEBUG, f"Leaders: {self.group.leaders} normal_op: {self.group.normal_op}")
-            if self.group.normal_op_threshold and self.term > self.group.normal_op_term and \
-                len(self.group.normal_op[self.term]) >= self.group.normal_op_threshold:
-                self.group.normal_op_event.set()
+
+        self.group.check_predicate()
 
