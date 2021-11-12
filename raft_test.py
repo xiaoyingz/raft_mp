@@ -4,6 +4,7 @@ import asyncio
 from logging import INFO, ERROR, DEBUG
 from collections import defaultdict
 from collections.abc import Sequence
+import sys
 
 class RaftGroup:
     def __init__(self, n):
@@ -170,3 +171,37 @@ class RaftProcess(framework.Process):
             
         self.group.check_predicate()
 
+async def run_test(test_function):
+    log_level = INFO
+    args = sys.argv[1:]
+    try:
+        if args[0] == "-d" or args[0] == "--debug":
+            log_level = DEBUG
+            args = args[1:]
+        n = int(args[0])
+    except:
+        print(f"Usage: {sys.argv[0]} [-d] n_nodes [command]")
+        sys.exit(1)
+
+    if len(args) > 1:
+        command = args[1:]
+    else:
+        command = ["./raft"]
+    
+    await alog.init(log_level)
+
+    group = RaftGroup(n)
+    try: 
+        await group.start(command)
+
+        await test_function(n, group)
+        
+        await alog.log(INFO, f"# Sent {group.network.message_count} messages, {group.network.byte_count} bytes")
+    finally:
+        group.stop_all()
+        await asyncio.sleep(1)
+
+    
+
+
+    
