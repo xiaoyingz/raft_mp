@@ -3,6 +3,7 @@ import alog
 import asyncio
 from logging import INFO, ERROR, DEBUG
 from collections import defaultdict
+from collections.abc import Sequence
 
 class RaftGroup:
     def __init__(self, n):
@@ -20,6 +21,8 @@ class RaftGroup:
         self.n = n
         self.error = asyncio.Event()
         self.network = framework.Network()
+        self.logs = { str(i): {} for i in range(self.n) }
+        self.commitIndex = { str(i): -1 for i in range(self.n) }
 
     async def start(self, command=["./raft"]):
         await alog.log(INFO, f"# Starting {self.n} processes")
@@ -95,10 +98,75 @@ class RaftProcess(framework.Process):
                 if leader != self.group.leaders[self.term]:
                     alog.log_no_wait(ERROR, f"### Error! Inconsistent leaders for term {self.term}")
                     self.group.error.set()
+                    return
             else:
                 self.group.leaders[self.term] = leader
             self.group.normal_op[self.term].add(self.pid)
             alog.log_no_wait(DEBUG, f"Leaders: {self.group.leaders} normal_op: {self.group.normal_op}")
 
+        elif var == "log":
+            if index is None or not index.isnumeric():
+                alog.log_no_wait(ERROR, f"### Error! Log index must be numeric, not {index}")
+                self.group.error.set()
+                return
+            index = int(index)
+            if isinstance(value, str) or not isinstance(value, Sequence) or \
+                len(value) != 2:
+                alog.log_no_wait(ERROR, f"### Log entry must be [term,logEntry], not {value}")
+                self.group.error.set()
+                return
+            term, log_entry = value
+            if isinstance(term, str):
+                if not term.isnumeric():
+                    alog.log_no_wait(ERROR, f"### Log term must be numeric, not {term}")
+                    self.group.error.set()
+                    return
+                term = int(term)
+            if not isinstance(term, int) or term < 0:
+                alog.log_no_wait(ERROR, f"### Log term must be numeric and positive, not {term}")
+                self.group.error.set()
+                return
+            if not isinstance(log_entry, str):
+                alog.log_no_wait(ERROR, f"### Log entry must be a string, not {log_entry}")
+                self.group.error.set()
+                return
+            self.group.logs[self.pid][index] = value
+
+            # check log matching property
+            for other in map(str,range(self.group.n)):
+                if other == self.pid:
+                    continue
+                if index in self.group.logs[other] and self.group.logs[other][index][0] == term:
+                    for ix in range(1, index+1):
+                        if ix not in self.group.logs[self.pid] or ix not in self.group.logs[other] or \
+                            self.group.logs[other][ix] != self.group.logs[self.pid][ix]:
+                            alog.log_no_wait(ERROR, f"### Log matching property failed for {self.pid} and {other}")
+                            alog.log_no_wait(ERROR, f"### Logs: {self.group.logs}")
+                            self.group.error.set()
+                            return
+        elif var == "commitIndex":
+            try:
+                new_commit_index = int(value)
+            except:
+                alog.log_no_wait(ERROR, f"###Error!  commitIndex must be numeric, not {value}")
+                self.group.error.set()
+                return
+            if new_commit_index < 0:
+                alog.log_no_wait(ERROR, f"###Error!  commitIndex must be positive, not {new_commit_index}")
+                self.group.error.set()
+                return
+            if new_commit_index > len(self.group.logs[self.pid]):
+                alog.log_no_wait(ERROR, f"### Error! commitIndex cannot be larger than len(log)")
+                alog.log_no_wait(ERROR, f"commitIndex[{self.pid}] = {new_commit_index}, logs[{self.pid}] = {self.group.logs[self.pid]}")
+                self.group.error.set()
+                return
+            if new_commit_index < self.group.commitIndex[self.pid]:
+                alog.log_no_wait(ERROR, f"### Error! commitIndex cannot decrease! old: {self.group.commitIndex[self.pid]}, new: {new_commit_index}")
+                self.group.error.set()
+                return
+
+            self.group.commitIndex[self.pid] = new_commit_index
+
+            
         self.group.check_predicate()
 
