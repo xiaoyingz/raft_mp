@@ -8,13 +8,10 @@ import raft_partition_test
 
 NENTRIES = 5
 
-async def main(n, group):
-    term, leader = await raft_election_test.elect_leader(n, group)
-
-
+async def log_three(n, group, term, leader):
     entries = [ secrets.token_urlsafe() for _ in range(NENTRIES) ]
     await alog.log(INFO, f"# Logging {entries}, waiting for 3 to be committed by leader")
-    async def log_task():   
+    async def log_task():
         try:     
             for entry in entries:
                 group.processes[leader].log_entry(entry)
@@ -46,10 +43,11 @@ async def main(n, group):
 
     if not log_good:
         await alog.log(ERROR, f"### Leader log: {group.logs[leader]}")
-        return
+        raise RuntimeError("Leader log incorrect")
+    
+    return entries, first_three
 
-    term2, leader2 = await raft_partition_test.partition_and_reelect(n, group, term, leader)
-
+async def check_new_leader_log(group, term, entries, first_three, leader2):
 # check the new leader's log
     log_good = False
     if not 3 <= len(group.logs[leader2]) <= 5:
@@ -70,6 +68,33 @@ async def main(n, group):
         await alog.log(INFO, f"New leader {leader2} log: {group.logs[leader2]}")
         raise RuntimeError("new leader log is in error")
 
+    return new_entries
+
+async def check_new_leader_log_post_commit(group, leader2, new_entries, term2, entries2):
+    # check leader's log
+    log_good = False
+    if len(group.logs[leader2]) != len(new_entries) + 5:
+        await alog.log(ERROR, "New leader's log has the wrong size")
+    elif { tuple(group.logs[leader2][i+len(new_entries)+1]) for i in range(5) } != { (term2,entry) for entry in entries2 }:
+        await alog.log(ERROR, "New leader's log has the wrong contents")
+    else:
+        log_good = True
+    if not log_good:
+        await alog.log(ERROR, f"New leader {leader2}'s log: {group.logs[leader2]}")
+        raise RuntimeError("New leader's log in error")
+
+
+
+async def main(n, group):
+    term, leader = await raft_election_test.elect_leader(n, group)
+
+    entries, first_three = await log_three(n, group, term, leader)
+
+    term2, leader2 = await raft_partition_test.partition_and_reelect(n, group, term, leader)
+
+
+    new_entries = await check_new_leader_log(group, term, entries, first_three, leader2)
+
     entries2 = [ secrets.token_urlsafe() for _ in range(5) ]
     await alog.log(INFO, f"# Logging new entries: {entries2}")
 
@@ -84,17 +109,7 @@ async def main(n, group):
     await alog.log(INFO, "# Waiting for new entries to be committed to all non-partitioned nodes")
     await group.wait_predicate(all_committed)
 
-    # check leader's log
-    log_good = False
-    if len(group.logs[leader2]) != len(new_entries) + 5:
-        await alog.log(ERROR, "New leader's log has the wrong size")
-    elif { tuple(group.logs[leader2][i+len(new_entries)+1]) for i in range(5) } != { (term2,entry) for entry in entries2 }:
-        await alog.log(ERROR, "New leader's log has the wrong contents")
-    else:
-        log_good = True
-    if not log_good:
-        await alog.log(ERROR, f"New leader {leader2}'s log: {group.logs[leader2]}")
-        raise RuntimeError("New leader's log in error")
+    await check_new_leader_log_post_commit(group, leader2, new_entries, term2, entries2)
 
     await alog.log(INFO, f"Repairing partition, waiting for old leader {leader} to catch up")
     await alog.log(INFO, f"Current commitIndex: {group.commitIndex}")
