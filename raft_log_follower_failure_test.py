@@ -57,7 +57,7 @@ async def main(n: int, group: raft_test.RaftGroup):
     one_more_to_kill = random.choice([pid for pid in map(str,range(n)) if pid != leader and pid not in followers_to_kill])
 
     await alog.log(INFO, f"Stopping {one_more_to_kill} to leave no majority")
-    #group.stop(one_more_to_kill)
+    group.stop(one_more_to_kill)
 
     saved_commit_index = group.commitIndex.copy()
 
