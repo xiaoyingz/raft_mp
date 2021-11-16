@@ -28,11 +28,8 @@ class RaftGroup:
     async def start(self, command=["./raft"]):
         await alog.log(INFO, f"# Starting {self.n} processes")
         processes = await asyncio.gather(*[RaftProcess.create(str(pid), self.network, 
-            *command, str(pid), str(self.n)) for pid in range(self.n)])
+            *command, str(pid), str(self.n), group=self) for pid in range(self.n)])
         self.processes = { p.pid : p for p in processes }
-        for p in processes:
-            p.group = self
-
         self.tasks = [ p.reader_task for p in processes ] + [ p.writer_task for p in processes ]
     
     async def wait_predicate(self, predicate, timeout=30):
@@ -81,8 +78,9 @@ class RaftGroup:
 
     
 class RaftProcess(framework.Process):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, group, **kwargs):
         self.term = None
+        self.group = group
         super().__init__(*args, **kwargs)
 
     def update_state(self, var, value, index=None):
