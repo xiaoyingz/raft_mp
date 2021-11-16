@@ -47,7 +47,7 @@ async def log_three(n, group, term, leader):
     
     return entries, first_three
 
-async def check_new_leader_log(group, term, entries, first_three, leader2):
+async def log_five_more(n, group, term, leader, entries, first_three, term2, leader2):
 # check the new leader's log
     log_good = False
     if not 3 <= len(group.logs[leader2]) <= 5:
@@ -68,9 +68,20 @@ async def check_new_leader_log(group, term, entries, first_three, leader2):
         await alog.log(INFO, f"New leader {leader2} log: {group.logs[leader2]}")
         raise RuntimeError("new leader log is in error")
 
-    return new_entries
+    entries2 = [ secrets.token_urlsafe() for _ in range(5) ]
+    await alog.log(INFO, f"# Logging new entries: {entries2}")
 
-async def check_new_leader_log_post_commit(group, leader2, new_entries, term2, entries2):
+    for entry in entries2:
+        group.processes[leader2].log_entry(entry)
+        await asyncio.sleep(0.5)
+
+    # wait for all to commit
+    def all_committed(group):
+        return min(group.commitIndex[p] for p in map(str,range(n)) if p != leader) == len(new_entries) + 5
+
+    await alog.log(INFO, "# Waiting for new entries to be committed to all reachable nodes")
+    await group.wait_predicate(all_committed)
+
     # check leader's log
     log_good = False
     if len(group.logs[leader2]) != len(new_entries) + 5:
@@ -83,8 +94,6 @@ async def check_new_leader_log_post_commit(group, leader2, new_entries, term2, e
         await alog.log(ERROR, f"New leader {leader2}'s log: {group.logs[leader2]}")
         raise RuntimeError("New leader's log in error")
 
-
-
 async def main(n, group):
     term, leader = await raft_election_test.elect_leader(n, group)
 
@@ -92,31 +101,15 @@ async def main(n, group):
 
     term2, leader2 = await raft_partition_test.partition_and_reelect(n, group, term, leader)
 
-
-    new_entries = await check_new_leader_log(group, term, entries, first_three, leader2)
-
-    entries2 = [ secrets.token_urlsafe() for _ in range(5) ]
-    await alog.log(INFO, f"# Logging new entries: {entries2}")
-
-    for entry in entries2:
-        group.processes[leader2].log_entry(entry)
-        await asyncio.sleep(0.5)
-
-    # wait for all to commit
-    def all_committed(group):
-        return min(group.commitIndex[p] for p in map(str,range(n)) if p != leader) == len(new_entries) + 5
-
-    await alog.log(INFO, "# Waiting for new entries to be committed to all non-partitioned nodes")
-    await group.wait_predicate(all_committed)
-
-    await check_new_leader_log_post_commit(group, leader2, new_entries, term2, entries2)
+    await log_five_more(n, group, term, leader, entries, first_three, term2, leader2)
 
     await alog.log(INFO, f"Repairing partition, waiting for old leader {leader} to catch up")
-    await alog.log(INFO, f"Current commitIndex: {group.commitIndex}")
     group.network.repair_partition()
 
     def caught_up(group):
         return group.commitIndex[leader] == group.commitIndex[leader2]
+
+    # commitIndex consistency checks will ensure new leader's log is correct
 
     await group.wait_predicate(caught_up)
 
