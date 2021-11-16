@@ -25,7 +25,7 @@ async def main(n, group):
     asyncio.create_task(log_task())
 
     def leader_reached_3(group):
-        return group.commitIndex[leader] == 3
+        return group.commitIndex[leader] >= 3
 
     await group.wait_predicate(leader_reached_3)
 
