@@ -33,15 +33,21 @@ class RaftGroup:
         self.tasks = [ p.reader_task for p in processes ] + [ p.writer_task for p in processes ]
     
     async def wait_predicate(self, predicate, timeout=30):
+        # first check if predicate alreaddy true!
+        if predicate(self):
+            return
+
         self.predicate = predicate
         self.predicate_event = asyncio.Event()
 
         error_task = asyncio.create_task(self.error.wait())
         predicate_task = asyncio.create_task(self.predicate_event.wait())
 
-        try: 
+        try:
             done, _ = await asyncio.wait(self.tasks + [ error_task, predicate_task ],
-                timeout = timeout, return_when=asyncio.FIRST_COMPLETED) 
+                    timeout = timeout, return_when=asyncio.FIRST_COMPLETED) 
+            if not done:
+                raise RuntimeError("Timeout occurred in wait_predicate")
             if error_task in done:
                 raise RuntimeError("Error occurred during test")
             else: 
@@ -51,10 +57,6 @@ class RaftGroup:
             for t in done:
                 if t != predicate_task:
                     await t
-
-        except asyncio.TimeoutError:
-            await alog.log(ERROR, "### Error! Predicate not satisfied in {timeout} seconds")
-            raise
         finally:
             self.predicate = None
             self.predicate_event = None
