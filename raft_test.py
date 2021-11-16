@@ -107,19 +107,19 @@ class RaftProcess(framework.Process):
 
         elif var == "log":
             if index is None or not index.isnumeric():
-                alog.log_no_wait(ERROR, f"### Error! Log index must be numeric, not {index}")
+                alog.log_no_wait(ERROR, f"### Error! Log index must be numeric, not {repr(index)}")
                 self.group.error.set()
                 return
             index = int(index)
             if isinstance(value, str) or not isinstance(value, Sequence) or \
                 len(value) != 2:
-                alog.log_no_wait(ERROR, f"### Log entry must be [term,logEntry], not {value}")
+                alog.log_no_wait(ERROR, f"### Log entry must be [term,logEntry], not {repr(value)}")
                 self.group.error.set()
                 return
             term, log_entry = value
             if isinstance(term, str):
                 if not term.isnumeric():
-                    alog.log_no_wait(ERROR, f"### Log term must be numeric, not {term}")
+                    alog.log_no_wait(ERROR, f"### Log term must be numeric, not {repr(term)}")
                     self.group.error.set()
                     return
                 term = int(term)
@@ -128,7 +128,7 @@ class RaftProcess(framework.Process):
                 self.group.error.set()
                 return
             if not isinstance(log_entry, str):
-                alog.log_no_wait(ERROR, f"### Log entry must be a string, not {log_entry}")
+                alog.log_no_wait(ERROR, f"### Log entry must be a string, not {repr(log_entry)}")
                 self.group.error.set()
                 return
             self.group.logs[self.pid][index] = value
@@ -149,7 +149,7 @@ class RaftProcess(framework.Process):
             try:
                 new_commit_index = int(value)
             except:
-                alog.log_no_wait(ERROR, f"###Error!  commitIndex must be numeric, not {value}")
+                alog.log_no_wait(ERROR, f"###Error!  commitIndex must be numeric, not {repr(value)}")
                 self.group.error.set()
                 return
             if new_commit_index < 0:
@@ -165,6 +165,24 @@ class RaftProcess(framework.Process):
                 alog.log_no_wait(ERROR, f"### Error! commitIndex cannot decrease! old: {self.group.commitIndex[self.pid]}, new: {new_commit_index}")
                 self.group.error.set()
                 return
+
+            if new_commit_index > 0 and not sum(1 for pid in range(self.group.n) if 
+                self.group.logs[str(pid)].get(new_commit_index,None) == 
+                    self.group.logs[self.pid][new_commit_index]) > self.group.n/2:
+                alog.log_no_wait(ERROR, f"### Error! entry committed at {new_commit_index} is replicated to less than a majority of servers")
+                alog.log_no_wait(ERROR, f"### Logs: {self.group.logs}")
+                self.group.error_set()
+                return
+            
+            for other in map(str,range(self.group.n)):
+                if other != self.pid:
+                    for ix in range(1, min(new_commit_index,self.group.commitIndex[other])+1):
+                        if self.group.logs[self.pid][ix] != self.group.logs[other][ix]:
+                            alog.log_no_wait(ERROR, f"### Mismatch among committed entries!")
+                            alog.log_no_wait(ERROR, f"### {self.pid}'s log[{ix}] = {self.group.logs[self.pid][ix]}")
+                            alog.log_no_wait(ERROR, f"### {other}'s log[{ix}] = {self.group.logs[other][ix]}")
+                            self.group.error_set()
+                            return
 
             self.group.commitIndex[self.pid] = new_commit_index
 
