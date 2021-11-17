@@ -1,0 +1,165 @@
+#!/usr/bin/python3
+import socket
+import threading
+import pickle
+import time
+import random
+import threading
+import sys
+import json
+from collections import namedtuple
+
+
+FOLLOWER = "FOLLOWER"
+LEADER = "LEADER"
+CANDIDATE = "CANDIDATE"
+ELECTION_SCALER = 3001
+MIN_ELECTION_TIMEOUT = 1500
+MUL = 10000
+HEARTBEAT_SCALER = 30
+RPC_SCALER = 10
+REQUESTVOTES_TYPE = "RequestVotes"
+REQUESTVOTES_REPLY_TYPE = "RequestVotesReply"
+HEARTBEAT_TYPE = "HeartbeatType"
+HEARTBEAT_INTERVAL = 300*0.001
+
+DEBUG = True
+
+node_lock = threading.Lock()
+
+class Message:
+    def __init__(self, term, from_node, message_type, message):
+        self.term = term
+        self.from_node = from_node
+        self.message_type = message_type
+        self.message = message
+
+def messageJsonDecod(messageDict):
+    return namedtuple('Message', messageDict.keys())(*messageDict.values())
+
+def dump_message(term, node_id, type, message):
+    message = Message(term, node_id, type, message)
+    return json.dumps(message.__dict__)
+
+def report_state(var_name, value):
+    if var_name == "leader":
+        print(f'STATE {var_name}="{str(value)}"', flush=True)
+    else:
+        print(f"STATE {var_name}={value}", flush=True)
+
+
+class Raft:
+    def __init__(self, node_id, node_num):
+        self.NODE_ID = int(node_id)
+        self.NODE_NUM = int(node_num)
+        self.term = 1
+        self.state = FOLLOWER
+        self.leader = None
+        self.log = []
+        self.commitIndex = -1
+        self.Timeout = self.getNewTimeout(ELECTION_SCALER)
+        self.RPCTimeout = self.getNewTimeout(RPC_SCALER)
+        self.repliedNodes = set()
+
+    def getNewTimeout(self, scaler):
+        return time.time() + max(MIN_ELECTION_TIMEOUT, random.random() * MUL % scaler)*0.001
+
+    def sendHeartBeat(self):
+        while True:
+            if self.state == LEADER:
+                time.sleep(HEARTBEAT_INTERVAL)
+                ping_json = dump_message(self.term, self.NODE_ID, HEARTBEAT_TYPE, None)
+                for targetId in range(self.NODE_NUM):
+                    if targetId == self.NODE_ID:
+                        continue
+                    print(f"SEND {targetId} {ping_json}", flush=True)
+
+    def checkTimeout(self):
+        while True:
+            # candidate has revieved majority's votes
+            if self.state == CANDIDATE and len(self.repliedNodes) > self.NODE_NUM // 2:
+                with node_lock:
+                    self.state = LEADER
+                    self.repliedNodes = set()
+                    self.leader = self.NODE_ID
+                    report_state("state", '"LEADER"')
+                    report_state("leader", self.NODE_ID)
+                    report_state("term", self.term)
+
+            if time.time() > self.Timeout and self.state != LEADER:
+                self.startElection()
+
+    def startElection(self):
+        with node_lock:
+            self.Timeout = self.getNewTimeout(ELECTION_SCALER)
+            self.state = CANDIDATE
+            self.term += 1
+            self.leader = None
+            report_state("state", '"CANDIDATE"')
+            report_state("term", self.term)
+            self.repliedNodes = set()
+            self.repliedNodes.add(self.NODE_ID)
+            self.sendRequestVoteRPC()
+
+    def sendRequestVoteRPC(self):
+        message_json = dump_message(self.term, self.NODE_ID, REQUESTVOTES_TYPE, None)
+        for targetId in range(self.NODE_NUM):
+            if targetId == self.NODE_ID or targetId in self.repliedNodes:
+                continue
+            print(f"SEND {targetId} {message_json}", flush=True)
+
+    def receiveRequestVote(self, message):
+        with node_lock:
+            if message.term > self.term:
+                self.Timeout = self.getNewTimeout(ELECTION_SCALER)
+                new_message_json = dump_message(message.term, self.NODE_ID, REQUESTVOTES_REPLY_TYPE, None)
+                print(f"SEND {message.from_node} {new_message_json}", flush=True)
+                self.state = FOLLOWER
+                report_state("state", '"FOLLOWER"')
+                self.term = message.term
+                report_state("term", self.term)
+                
+
+    def receiveRequestVoteReply(self, message):
+        self.repliedNodes.add(message.from_node)
+
+    def receiveMessage(self):
+        while True:
+            line = sys.stdin.readline()
+            command = line.strip().split(" ", 2)
+            message = json.loads(command[2], object_hook=messageJsonDecod)
+            if message.message_type == REQUESTVOTES_TYPE:
+                self.receiveRequestVote(message)
+            elif message.message_type == REQUESTVOTES_REPLY_TYPE:
+                self.receiveRequestVoteReply(message)
+            elif message.message_type == HEARTBEAT_TYPE:
+                with node_lock:
+                    self.Timeout = self.getNewTimeout(ELECTION_SCALER)
+                    if self.term <= message.term:
+                        if self.state == LEADER:
+                            self.state = FOLLOWER
+                            report_state("state", '"FOLLOWER"')
+                        self.term = message.term
+                        report_state("term", self.term)
+                        self.leader = message.from_node
+                        report_state("leader", self.leader)
+
+def start_service():
+    global NODE_ID, NODE_NUM
+    parameters = check_cl_args()
+    random.seed(time.time())
+    raft = Raft(parameters[0], parameters[1])
+    threading.Thread(target=raft.checkTimeout, args=()).start()
+    threading.Thread(target=raft.receiveMessage, args=()).start()
+    threading.Thread(target=raft.sendHeartBeat, args=()).start()
+
+
+def check_cl_args():
+    if len(sys.argv) != 3:
+        print("2 arguments needed: Node_id Nodes_number")
+        sys.exit()
+    return sys.argv[1:]
+
+
+if __name__ == "__main__":
+    start_service()
